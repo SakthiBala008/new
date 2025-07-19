@@ -73,6 +73,7 @@ app.use((req, res, next) => {
     reusePort: true,
   }, () => {
     log(`🚀 serving on port ${port}`);
+    log(`🌐 Preview available at: http://localhost:${port}`);
     log(`📊 Dynamic portfolio updates enabled`);
     log(`🔗 WebSocket available for real-time data`);
     log(`🐍 Python ML services available (run separately)`);
