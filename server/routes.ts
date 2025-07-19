@@ -1,5 +1,6 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
+import { spawn } from "child_process";
 import { storage } from "./storage";
 import { 
   optimizePortfolioSchema,
@@ -8,7 +9,60 @@ import {
 } from "@shared/schema";
 import { z } from "zod";
 
+// Python Flask service integration
+let pythonProcess: any = null;
+
+function startPythonServices() {
+  try {
+    // Start Python Flask server for ML services
+    pythonProcess = spawn('python3', ['server/services/run_server.py'], {
+      stdio: 'pipe',
+      env: { ...process.env, FLASK_PORT: '8000' }
+    });
+
+    pythonProcess.stdout?.on('data', (data: Buffer) => {
+      console.log(`[Python ML] ${data.toString().trim()}`);
+    });
+
+    pythonProcess.stderr?.on('data', (data: Buffer) => {
+      console.log(`[Python ML Error] ${data.toString().trim()}`);
+    });
+
+    console.log('🐍 Python ML services starting on port 8000...');
+  } catch (error) {
+    console.log('⚠️  Python ML services not available:', error);
+  }
+}
+
+async function callPythonService(endpoint: string, data: any = null) {
+  try {
+    const method = data ? 'POST' : 'GET';
+    const options: RequestInit = {
+      method,
+      headers: { 'Content-Type': 'application/json' },
+    };
+    
+    if (data) {
+      options.body = JSON.stringify(data);
+    }
+
+    const response = await fetch(`http://localhost:8000${endpoint}`, options);
+    
+    if (!response.ok) {
+      throw new Error(`Python service error: ${response.status}`);
+    }
+    
+    return await response.json();
+  } catch (error) {
+    console.log(`Python service call failed for ${endpoint}:`, error);
+    return null;
+  }
+}
+
 export async function registerRoutes(app: Express): Promise<Server> {
+  // Start Python ML services
+  startPythonServices();
+
   // Portfolio routes
   app.get("/api/portfolios/:userId", async (req, res) => {
     try {
@@ -100,7 +154,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // ML Model performance routes
   app.get("/api/ml-models/performance", async (req, res) => {
     try {
-      const performance = await storage.getLatestModelPerformance();
+      // Try to get real ML performance from Python service
+      let performance = await callPythonService('/api/ml-models/performance');
+      
+      // Fallback to stored performance data
+      if (!performance) {
+        performance = await storage.getLatestModelPerformance();
+      }
+      
       res.json(performance);
     } catch (error) {
       res.status(500).json({ message: "Failed to fetch ML model performance" });
@@ -126,9 +187,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const validatedData = optimizePortfolioSchema.parse(req.body);
       
-      // This would typically call Python ML services
-      // For now, return optimized allocation based on risk tolerance
-      const optimizedAllocation = generateOptimizedAllocation(validatedData);
+      // Try to call Python ML services first
+      let optimizedAllocation = await callPythonService('/api/optimize-portfolio', validatedData);
+      
+      // Fallback to local optimization if Python service unavailable
+      if (!optimizedAllocation) {
+        console.log('📊 Using fallback optimization (Python service unavailable)');
+        optimizedAllocation = generateOptimizedAllocation(validatedData);
+      }
       
       // Create new portfolio with optimized allocation
       const portfolio = await storage.createPortfolio({
@@ -363,6 +429,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   const httpServer = createServer(app);
+  
+  // Cleanup on server shutdown
+  process.on('SIGTERM', () => {
+    if (pythonProcess) {
+      pythonProcess.kill();
+    }
+  });
+  
   return httpServer;
 }
 

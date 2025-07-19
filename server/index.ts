@@ -2,6 +2,7 @@ import express, { type Request, Response, NextFunction } from "express";
 import { registerRoutes } from "./routes";
 import { setupVite, serveStatic, log } from "./vite";
 import { priceSimulator } from "./price-simulator";
+import { WebSocketManager } from "./websocket";
 
 const app = express();
 app.use(express.json());
@@ -40,6 +41,10 @@ app.use((req, res, next) => {
 (async () => {
   const server = await registerRoutes(app);
 
+  // Initialize WebSocket for real-time updates
+  const wsManager = new WebSocketManager(server);
+  log("🔌 WebSocket server initialized for real-time updates");
+
   app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
     const status = err.status || err.statusCode || 500;
     const message = err.message || "Internal Server Error";
@@ -69,8 +74,18 @@ app.use((req, res, next) => {
   }, () => {
     log(`🚀 serving on port ${port}`);
     log(`📊 Dynamic portfolio updates enabled`);
+    log(`🔗 WebSocket available for real-time data`);
+    log(`🐍 Python ML services available (run separately)`);
     
     // Start price simulation for dynamic market data
     priceSimulator.start();
+  });
+
+  // Graceful shutdown
+  process.on('SIGTERM', () => {
+    log('🛑 Shutting down gracefully...');
+    priceSimulator.stop();
+    wsManager.stop();
+    server.close();
   });
 })();
